@@ -1,4 +1,6 @@
-import { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
+import type { FastifyInstance } from "fastify";
+import type { FastifyReply } from "fastify";
+import type { FastifyRequest} from "fastify";
 import jwt from "jsonwebtoken";
 
 const JWT_SECRET = process.env.JWT_SECRET || "your-secret-key";
@@ -12,6 +14,7 @@ interface ProductBody {
   description?: string;
   price: number;
   categoryId: number;
+  imgurl?: string; // Optional image URL
 }
 
 interface OrderBody {
@@ -70,7 +73,7 @@ export async function FnbRoute(fastify: FastifyInstance) {
         category
       });
     } catch (error) {
-      if (error.code === "P2002") {
+      if (typeof error === "object" && error !== null && "code" in error && (error as any).code === "P2002") {
         return reply.status(400).send({ error: "Category name already exists" });
       }
       reply.status(500).send({ error: "Internal server error" });
@@ -95,11 +98,13 @@ export async function FnbRoute(fastify: FastifyInstance) {
         category
       });
     } catch (error) {
-      if (error.code === "P2025") {
-        return reply.status(404).send({ error: "Category not found" });
-      }
-      if (error.code === "P2002") {
-        return reply.status(400).send({ error: "Category name already exists" });
+      if (typeof error === "object" && error !== null && "code" in error) {
+        if ((error as any).code === "P2025") {
+          return reply.status(404).send({ error: "Category not found" });
+        }
+        if ((error as any).code === "P2002") {
+          return reply.status(400).send({ error: "Category name already exists" });
+        }
       }
       reply.status(500).send({ error: "Internal server error" });
     }
@@ -118,8 +123,10 @@ export async function FnbRoute(fastify: FastifyInstance) {
 
       reply.send({ message: "Category deleted successfully" });
     } catch (error) {
-      if (error.code === "P2025") {
-        return reply.status(404).send({ error: "Category not found" });
+      if (typeof error === "object" && error !== null && "code" in error) {
+        if ((error as any).code === "P2025") {
+          return reply.status(404).send({ error: "Category not found" });
+        }
       }
       reply.status(500).send({ error: "Internal server error" });
     }
@@ -164,14 +171,15 @@ export async function FnbRoute(fastify: FastifyInstance) {
     preHandler: authenticate
   }, async (request, reply) => {
     try {
-      const { name, description, price, categoryId } = request.body;
+      const { name, description, price, categoryId, imgurl } = request.body;
 
       const product = await fastify.prisma.product.create({
         data: {
           name,
           description,
           price,
-          categoryId
+          categoryId,
+          imgurl // Save image URL if provided
         },
         include: {
           category: true
@@ -183,11 +191,13 @@ export async function FnbRoute(fastify: FastifyInstance) {
         product
       });
     } catch (error) {
-      if (error.code === "P2002") {
-        return reply.status(400).send({ error: "Product name already exists" });
-      }
-      if (error.code === "P2003") {
-        return reply.status(400).send({ error: "Category not found" });
+      if (typeof error === "object" && error !== null && "code" in error) {
+        if ((error as any).code === "P2025") {
+          return reply.status(404).send({ error: "not found" });
+        }
+        if ((error as any).code === "P2002") {
+          return reply.status(400).send({ error: "Product name already exists" });
+        }
       }
       reply.status(500).send({ error: "Internal server error" });
     }
@@ -199,7 +209,7 @@ export async function FnbRoute(fastify: FastifyInstance) {
   }, async (request, reply) => {
     try {
       const { id } = request.params;
-      const { name, description, price, categoryId } = request.body;
+      const { name, description, price, categoryId, imgurl } = request.body;
 
       const product = await fastify.prisma.product.update({
         where: { id: parseInt(id) },
@@ -207,7 +217,8 @@ export async function FnbRoute(fastify: FastifyInstance) {
           name,
           description,
           price,
-          categoryId
+          categoryId,
+          imgurl // Update image URL if provided
         },
         include: {
           category: true
@@ -219,14 +230,16 @@ export async function FnbRoute(fastify: FastifyInstance) {
         product
       });
     } catch (error) {
-      if (error.code === "P2025") {
-        return reply.status(404).send({ error: "Product not found" });
-      }
-      if (error.code === "P2002") {
-        return reply.status(400).send({ error: "Product name already exists" });
-      }
-      if (error.code === "P2003") {
-        return reply.status(400).send({ error: "Category not found" });
+      if (typeof error === "object" && error !== null && "code" in error) {
+        if ((error as any).code === "P2025") {
+          return reply.status(404).send({ error: "Product not found" });
+        }
+        if ((error as any).code === "P2002") {
+          return reply.status(400).send({ error: "Product name already exists" });
+        }
+        if ((error as any).code === "P2003") {
+          return reply.status(400).send({ error: "Category not found" });
+        }
       }
       reply.status(500).send({ error: "Internal server error" });
     }
@@ -245,7 +258,7 @@ export async function FnbRoute(fastify: FastifyInstance) {
 
       reply.send({ message: "Product deleted successfully" });
     } catch (error) {
-      if (error.code === "P2025") {
+      if (typeof error === "object" && error !== null && "code" in error && (error as any).code === "P2025") {
         return reply.status(404).send({ error: "Product not found" });
       }
       reply.status(500).send({ error: "Internal server error" });
@@ -404,7 +417,7 @@ export async function FnbRoute(fastify: FastifyInstance) {
         order
       });
     } catch (error) {
-      if (error.code === "P2025") {
+      if (typeof error === "object" && error !== null && "code" in error && (error as any).code === "P2025") {
         return reply.status(404).send({ error: "Order not found" });
       }
       reply.status(500).send({ error: "Internal server error" });
@@ -429,7 +442,7 @@ export async function FnbRoute(fastify: FastifyInstance) {
 
       reply.send({ message: "Order deleted successfully" });
     } catch (error) {
-      if (error.code === "P2025") {
+      if (typeof error === "object" && error !== null && "code" in error && (error as any).code === "P2025") {
         return reply.status(404).send({ error: "Order not found" });
       }
       reply.status(500).send({ error: "Internal server error" });

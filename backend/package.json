@@ -10,7 +10,8 @@
     "prisma:studio": "bunx prisma studio"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "prisma": "^6.11.1"
   },
   "peerDependencies": {
     "typescript": "^5"
@@ -25,7 +26,6 @@
     "fastify": "^5.4.0",
     "jsonwebtoken": "^9.0.2",
     "midtrans-client": "^1.4.3",
-    "node-cron": "^4.2.0",
-    "prisma": "^6.11.1"
+    "node-cron": "^4.2.0"
   }
 }

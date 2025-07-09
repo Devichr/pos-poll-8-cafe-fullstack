@@ -7,13 +7,26 @@ import {
   ShoppingCart, 
   CreditCard,
   Search,
-  Filter,
   Package,
-  DollarSign,
-  Clock,
-  User
+  Clock
 } from 'lucide-react'
 import { getAuthHeaders } from '../utils/auth'
+declare global {
+  interface Window {
+    snap: {
+      pay: (
+        token: string,
+        options?: {
+          onSuccess?: (result: any) => void;
+          onPending?: (result: any) => void;
+          onError?: (result: any) => void;
+          onClose?: () => void;
+        }
+      ) => void;
+    };
+  }
+}
+
 
 interface Category {
   id: number
@@ -27,6 +40,7 @@ interface Product {
   description?: string
   price: number
   categoryId: number
+  imgurl: string
   category?: Category
 }
 
@@ -70,11 +84,26 @@ export default function Cafe() {
 
   // Form states
   const [categoryForm, setCategoryForm] = useState({ name: '' })
+const [midtransConfig, setMidtransConfig] = useState<{ clientKey: string; isProduction: false } | null>(null);
+
+const API = {
+  createPayment: async ({ orderId }: { orderId: number }) => {
+    const response = await fetch(`http://localhost:5500/payment/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+      body: JSON.stringify({ orderId })
+    });
+    if (!response.ok) throw new Error('Failed to create payment');
+    return response.json();
+  }
+};
+
   const [productForm, setProductForm] = useState({
     name: '',
     description: '',
     price: 0,
-    categoryId: 0
+    categoryId: 0,
+    imgurl: '',
   })
 
   useEffect(() => {
@@ -154,74 +183,160 @@ export default function Cafe() {
     }, 0)
   }
 
-  const createOrder = async () => {
-    if (cart.length === 0) {
-      setError('Cart is empty')
-      return
-    }
-
-    setIsLoading(true)
-    setError('')
-
-    try {
-      const response = await fetch('http://localhost:5500/orders', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeaders()
-        },
-        body: JSON.stringify({
-          customerName: customerName || undefined,
-          items: cart.map(item => ({
-            productId: item.productId,
-            quantity: item.quantity
-          }))
-        })
-      })
-
-      if (response.ok) {
-        setSuccess('Order created successfully')
-        setCart([])
-        setCustomerName('')
-        fetchOrders()
-        
-        // Show payment options
-        const data = await response.json()
-        handlePayment(data.order.id)
-      } else {
-        const data = await response.json()
-        setError(data.error || 'Failed to create order')
-      }
-    } catch (error) {
-      setError('Network error. Please try again.')
-    } finally {
-      setIsLoading(false)
-    }
+ const createOrder = async () => {
+  if (cart.length === 0) {
+    setError('Cart is empty');
+    return;
   }
 
-  const handlePayment = async (orderId: number) => {
-    try {
-      const response = await fetch('http://localhost:5500/payment/create', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...getAuthHeaders()
-        },
-        body: JSON.stringify({ orderId })
-      })
+  setIsLoading(true);
+  setError('');
+  setSuccess('');
 
-      const data = await response.json()
-      
-      if (response.ok) {
-        // In a real app, you would redirect to Midtrans payment page
-        alert(`Payment created! Token: ${data.token}`)
+  try {
+    const response = await fetch('http://localhost:5500/orders', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders()
+      },
+      body: JSON.stringify({
+        customerName: customerName || undefined,
+        items: cart.map(item => ({
+          productId: item.productId,
+          quantity: item.quantity
+        }))
+      })
+    });
+
+    const data = await response.json();
+
+    if (response.ok) {
+      setSuccess('Order created successfully');
+      setCart([]);
+      setCustomerName('');
+      fetchOrders();
+
+      if (data?.order?.id) {
+        await handlePayment(data.order.id); // Pastikan ada orderId
       } else {
-        console.error('Payment creation failed:', data.error)
+        setError('Failed to retrieve order ID for payment.');
       }
-    } catch (error) {
-      console.error('Payment error:', error)
+    } else {
+      setError(data?.error || 'Failed to create order');
     }
+  } catch (error) {
+    setError('Network error. Please try again.');
+  } finally {
+    setIsLoading(false);
   }
+};
+// Load Midtrans configuration
+const loadMidtransConfig = async () => {
+  try {
+    const response = await fetch('http://localhost:5500/payment/config', {
+      headers: getAuthHeaders(),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to load Midtrans config');
+    }
+    const data = await response.json();
+    setMidtransConfig(data);
+    return data; // Return config for immediate use if needed
+  } catch (error) {
+    console.error('Error loading Midtrans config:', error);
+    setError('Failed to load payment configuration');
+    return null;
+  }
+};
+
+// Load Midtrans Snap script
+const loadMidtransScript = (clientKey: string, isProduction: boolean) => {
+  return new Promise<void>((resolve, reject) => {
+    if (window.snap) {
+      resolve();
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = isProduction
+      ? 'https://app.midtrans.com/snap/snap.js'
+      : 'https://app.sandbox.midtrans.com/snap/snap.js';
+    script.setAttribute('data-client-key', clientKey);
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('Failed to load Midtrans script'));
+    document.head.appendChild(script);
+  });
+};
+
+// Handle payment with Midtrans
+const handlePayment = async (orderId: number) => {
+  setIsLoading(true);
+  setError('');
+  try {
+    // Load Midtrans config if not already loaded
+    let config = midtransConfig;
+    if (!config) {
+      config = await loadMidtransConfig();
+      if (!config?.clientKey) {
+        throw new Error('Midtrans configuration not available');
+      }
+    }
+
+    // Load Midtrans script
+    await loadMidtransScript(config.clientKey, config.isProduction);
+
+    // Create payment
+    const paymentResponse = await fetch('http://localhost:5500/payment/create', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...getAuthHeaders(),
+      },
+      body: JSON.stringify({
+        paymentType: 'Order',
+        orderId: orderId,
+      }),
+    });
+
+    if (!paymentResponse.ok) {
+      const errorData = await paymentResponse.json();
+      throw new Error(errorData?.error || 'Failed to create payment');
+    }
+
+    const paymentData = await paymentResponse.json();
+
+    if (!paymentData?.token) {
+      throw new Error('Invalid payment token received');
+    }
+
+    // Open Midtrans payment popup
+    window.snap.pay(paymentData.token, {
+      onSuccess: (result) => {
+        console.log('Payment success:', result);
+        setSuccess('Payment completed successfully');
+        fetchOrders(); // Refresh orders after successful payment
+      },
+      onPending: (result) => {
+        console.log('Payment pending:', result);
+        setSuccess('Payment is pending. Please check status later.');
+      },
+      onError: (result) => {
+        console.error('Payment error:', result);
+        setError('Payment failed. Please try again.');
+      },
+      onClose: () => {
+        console.log('Payment popup closed');
+        setSuccess('Payment popup closed. Please complete the payment.');
+      },
+    });
+  } catch (error) {
+    console.error('Payment error:', error);
+    setError('An error occurred during payment processing');
+  } finally {
+    setIsLoading(false);
+  }
+};
 
   const filteredProducts = products.filter(product => {
     const matchesSearch = product.name.toLowerCase().includes(searchTerm.toLowerCase())
@@ -236,6 +351,115 @@ export default function Cafe() {
     }).format(amount)
   }
 
+  // Handler untuk kategori
+  const handleCategorySubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setIsLoading(true)
+    setError('')
+    try {
+      const method = editingCategory ? 'PUT' : 'POST'
+      const url = editingCategory
+        ? `http://localhost:5500/categories/${editingCategory.id}`
+        : 'http://localhost:5500/categories'
+      const response = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ name: categoryForm.name })
+      })
+      if (response.ok) {
+        setShowCategoryModal(false)
+        setEditingCategory(null)
+        setCategoryForm({ name: '' })
+        fetchCategories()
+      } else {
+        const data = await response.json()
+        setError(data.error || 'Failed to save category')
+      }
+    } catch {
+      setError('Network error')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleDeleteCategory = async (categoryId: number) => {
+    if (!confirm('Delete this category?')) return
+    setIsLoading(true)
+    try {
+      const response = await fetch(`http://localhost:5500/categories/${categoryId}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
+      })
+      if (response.ok) fetchCategories()
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // Handler untuk produk
+  const handleProductSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setIsLoading(true)
+    setError('')
+    try {
+      const method = editingProduct ? 'PUT' : 'POST'
+      const url = editingProduct
+        ? `http://localhost:5500/products/${editingProduct.id}`
+        : 'http://localhost:5500/products'
+      // Kirim imgurl ke backend
+      const payload = {
+        ...productForm,
+        imgurl: productForm.imgurl // pastikan imgurl dikirim
+      }
+      const response = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify(payload)
+      })
+      if (response.ok) {
+        setShowProductModal(false)
+        setEditingProduct(null)
+        setProductForm({ name: '', description: '', price: 0, categoryId: 0, imgurl: '' })
+        fetchProducts()
+      } else {
+        const data = await response.json()
+        setError(data.error || 'Failed to save product')
+      }
+    } catch {
+      setError('Network error')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  const handleDeleteProduct = async (productId: number) => {
+    if (!confirm('Delete this product?')) return
+    setIsLoading(true)
+    try {
+      const response = await fetch(`http://localhost:5500/products/${productId}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
+      })
+      if (response.ok) fetchProducts()
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // Fungsi untuk handle file gambar, simpan ke imgurl (base64)
+  const handleProductImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      setProductForm(prev => ({
+        ...prev,
+        imgurl: reader.result as string // simpan ke imgurl
+      }))
+    }
+    reader.readAsDataURL(file)
+  }
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -244,8 +468,6 @@ export default function Cafe() {
           <Coffee className="h-8 w-8 text-green-600" />
           <h1 className="text-3xl font-bold text-gray-900">Cafe Management</h1>
         </div>
-        
-        {/* Tab Navigation */}
         <div className="flex space-x-1 bg-gray-100 p-1 rounded-lg">
           {[
             { id: 'pos', label: 'POS', icon: ShoppingCart },
@@ -319,9 +541,14 @@ export default function Cafe() {
                   className="bg-white rounded-lg shadow p-4 hover:shadow-md transition cursor-pointer"
                   onClick={() => addToCart(product)}
                 >
-                  <div className="aspect-square bg-gray-100 rounded-md mb-3 flex items-center justify-center">
-                    <Coffee className="h-8 w-8 text-gray-400" />
-                  </div>
+                  {/* Tampilkan gambar dari imgurl jika ada */}
+                  {product.imgurl && (
+                    <img
+                      src={product.imgurl}
+                      alt={product.name}
+                      className="w-full aspect-square object-cover rounded mb-2"
+                    />
+                  )}
                   <h3 className="font-medium text-gray-900 truncate">{product.name}</h3>
                   <p className="text-sm text-gray-500 truncate">{product.description}</p>
                   <p className="text-lg font-bold text-green-600 mt-2">
@@ -442,7 +669,10 @@ export default function Cafe() {
                       >
                         <Edit className="h-4 w-4" />
                       </button>
-                      <button className="text-red-600 hover:text-red-800">
+                      <button
+                        onClick={() => handleDeleteCategory(category.id)}
+                        className="text-red-600 hover:text-red-800"
+                      >
                         <Trash2 className="h-4 w-4" />
                       </button>
                     </div>
@@ -470,6 +700,14 @@ export default function Cafe() {
                 <div key={product.id} className="border rounded-lg p-4">
                   <div className="flex items-start justify-between mb-2">
                     <div className="flex-1">
+                      {/* Tampilkan gambar dari imgurl jika ada */}
+                      {product.imgurl && (
+                        <img
+                          src={product.imgurl}
+                          alt={product.name}
+                          className="w-full aspect-square object-cover rounded mb-2"
+                        />
+                      )}
                       <h3 className="font-medium text-gray-900">{product.name}</h3>
                       <p className="text-sm text-gray-500">{product.description}</p>
                       <p className="text-lg font-bold text-green-600 mt-1">
@@ -487,7 +725,8 @@ export default function Cafe() {
                             name: product.name,
                             description: product.description || '',
                             price: parseFloat(product.price.toString()),
-                            categoryId: product.categoryId
+                            categoryId: product.categoryId,
+                            imgurl: product.imgurl || ''
                           })
                           setShowProductModal(true)
                         }}
@@ -495,7 +734,10 @@ export default function Cafe() {
                       >
                         <Edit className="h-4 w-4" />
                       </button>
-                      <button className="text-red-600 hover:text-red-800">
+                      <button
+                        onClick={() => handleDeleteProduct(product.id)}
+                        className="text-red-600 hover:text-red-800"
+                      >
                         <Trash2 className="h-4 w-4" />
                       </button>
                     </div>
@@ -562,6 +804,130 @@ export default function Cafe() {
               </tbody>
             </table>
           </div>
+        </div>
+      )}
+
+      {/* Category Modal */}
+      {showCategoryModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50">
+          <form
+            onSubmit={handleCategorySubmit}
+            className="bg-white rounded-lg p-6 w-full max-w-sm space-y-4 shadow"
+          >
+            <h3 className="text-lg font-semibold mb-2">
+              {editingCategory ? 'Edit Category' : 'Add Category'}
+            </h3>
+            <input
+              type="text"
+              required
+              placeholder="Category name"
+              value={categoryForm.name}
+              onChange={e => setCategoryForm({ name: e.target.value })}
+              className="w-full px-3 py-2 border rounded"
+            />
+            <div className="flex justify-end space-x-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCategoryModal(false)
+                  setEditingCategory(null)
+                  setCategoryForm({ name: '' })
+                }}
+                className="px-4 py-2 rounded bg-gray-200"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 rounded bg-green-600 text-white"
+                disabled={isLoading}
+              >
+                {isLoading ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* Product Modal */}
+      {showProductModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-30 flex items-center justify-center z-50">
+          <form
+            onSubmit={handleProductSubmit}
+            className="bg-white rounded-lg p-6 w-full max-w-md space-y-4 shadow"
+          >
+            <h3 className="text-lg font-semibold mb-2">
+              {editingProduct ? 'Edit Product' : 'Add Product'}
+            </h3>
+            <input
+              type="text"
+              required
+              placeholder="Product name"
+              value={productForm.name}
+              onChange={e => setProductForm({ ...productForm, name: e.target.value })}
+              className="w-full px-3 py-2 border rounded"
+            />
+            <textarea
+              placeholder="Description"
+              value={productForm.description}
+              onChange={e => setProductForm({ ...productForm, description: e.target.value })}
+              className="w-full px-3 py-2 border rounded"
+            />
+            <input
+              type="number"
+              required
+              placeholder="Price"
+              value={productForm.price}
+              onChange={e => setProductForm({ ...productForm, price: parseFloat(e.target.value) })}
+              className="w-full px-3 py-2 border rounded"
+            />
+            <select
+              required
+              value={productForm.categoryId}
+              onChange={e => setProductForm({ ...productForm, categoryId: parseInt(e.target.value) })}
+              className="w-full px-3 py-2 border rounded"
+            >
+              <option value="">Select Category</option>
+              {categories.map(cat => (
+                <option key={cat.id} value={cat.id}>{cat.name}</option>
+              ))}
+            </select>
+            {/* Input gambar */}
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handleProductImageChange}
+              className="w-full px-3 py-2 border rounded"
+            />
+            {/* Preview gambar */}
+            {productForm.imgurl && (
+              <img
+                src={productForm.imgurl}
+                alt="Preview"
+                className="w-full aspect-square object-cover rounded"
+              />
+            )}
+            <div className="flex justify-end space-x-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowProductModal(false)
+                  setEditingProduct(null)
+                  setProductForm({ name: '', description: '', price: 0, categoryId: 0, imgurl: '' })
+                }}
+                className="px-4 py-2 rounded bg-gray-200"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 rounded bg-green-600 text-white"
+                disabled={isLoading}
+              >
+                {isLoading ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </form>
         </div>
       )}
     </div>

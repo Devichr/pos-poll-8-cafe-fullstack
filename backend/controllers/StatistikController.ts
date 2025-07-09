@@ -143,7 +143,7 @@ export class PoolStatsController {
           break;
         default: // day
           startDate = dayjs().subtract(1, 'day').toDate();
-          groupBy = 'hour';
+          groupBy = 'day';
       }
       
       const rawData = await this.prisma.poolBookings.groupBy({
@@ -165,7 +165,7 @@ export class PoolStatsController {
       
       // Format data for chart
       const formattedData = rawData.map(item => ({
-        date: dayjs(item.createdAt).format(groupBy === 'hour' ? 'HH:mm' : 'DD MMM'),
+        date: dayjs(item.createdAt).format(groupBy === 'week' ? 'WW YYYY' : 'DD MMM'),
         revenue: item._sum.totalPrice || 0
       }));
       

@@ -4,7 +4,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
@@ -52,10 +52,10 @@ model PoolBookings {
   notes         String?
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
+  payments      Payment[]
 
   @@map("pool_bookings")
 }
-
 
 model User {
   id        Int      @id @default(autoincrement())
@@ -67,8 +67,6 @@ model User {
 
   @@map("users")
 }
-
-
 
 model Category {
   id        Int      @id @default(autoincrement())
@@ -84,19 +82,30 @@ model Product {
   description String?
   price       Decimal
   categoryId  Int
+  imgurl      String?
   category    Category @relation(fields: [categoryId], references: [id])
   orderItems  OrderItem[]
 
   @@map("products")
 }
 
+enum OrderStatus {
+  Pending
+  Paid
+  Processing
+  Completed
+  Cancelled
+}
+
 model Order {
-  id          Int      @id @default(autoincrement())
+  id          Int         @id @default(autoincrement())
   customerName String?
   totalAmount Decimal
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  status      OrderStatus @default(Pending)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
   orderItems  OrderItem[]
+  payments    Payment[]
 
   @@map("orders")
 }
@@ -109,7 +118,43 @@ model OrderItem {
   product   Product  @relation(fields: [productId], references: [id])
   quantity  Int
   price     Decimal
+  notes     String?
 
   @@map("order_items")
+}
+
+enum PaymentStatus {
+  Pending
+  Success
+  Failed
+  Cancelled
+  Expired
+  Challenge
+}
+
+enum PaymentType {
+  Order
+  Booking
+}
+
+model Payment {
+  id                  Int           @id @default(autoincrement())
+  orderId             Int?
+  order               Order?        @relation(fields: [orderId], references: [id])
+  bookingId           Int?
+  booking             PoolBookings? @relation(fields: [bookingId], references: [id])
+  paymentType         PaymentType
+  amount              Decimal
+  status              PaymentStatus @default(Pending)
+  midtransOrderId     String        @unique
+  midtransToken       String?
+  midtransRedirectUrl String?
+  transactionId       String?
+  paymentMethod       String?
+  paidAt              DateTime?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  @@map("payments")
 }
 
